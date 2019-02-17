@@ -1,0 +1,14 @@
+{
+  "name": "blogs",
+  "version": "1.0.0",
+  "description": "Nuxt.js project",
+  "author": "xuzilong",
+  "private": true,
+  "scripts": {},
+  "dependencies": {
+    "express": "^4.16.3",
+    "vue": "^2.5.17",
+    "vue-server-renderer": "^2.5.17"
+  },
+  "devDependencies": {}
+}

@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html>
+<head lang="en">
+    <meta charset="UTF-8">
+    <title>h</title>
+</head>
+<body>
+<input id="text" v-model="name"/>
+
+<div id="view" v-text="name"></div>
+
+<div>{{name}}</div>
+
+<script>
+
+function observe (value, vm) {
+    if (!value || typeof value !== 'object') {
+        return
+    }
+
+    let dep = new Dep()
+    return new Proxy(value, {
+      get: function (target, key, receiver) {
+        if (Dep.target) {
+          dep.depend()
+        }
+        return Reflect.get(target, key, receiver)
+      },
+      set: function (target, key, value, receiver) {
+        dep.notify()
+        return Reflect.set(target, key, value, receiver)
+      }
+    })
+}
+
+
+var uid = 0
+
+function Dep () {
+    this.id = uid++
+    this.subs = []
+}
+Dep.prototype = {
+    addSub: function (sub) {
+        this.subs.push(sub)
+    },
+
+    depend: function () {
+        Dep.target.addDep(this)
+    },
+
+    removeSub: function (sub) {
+        const index = this.subs.indexOf(sub)
+        if (index !== -1) {
+            this.subs.splice(index, 1)
+        }
+    },
+
+    notify: function () {
+        this.subs.forEach(function (sub) {
+            sub.update()
+        })
+    }
+}
+
+Dep.target = null
+
+function Compile (el, vm) {
+    this.$vm = vm
+    this.$el = this.isElementNode(el) ? el : document.querySelector(el)
+    if (this.$el) {
+        this.$fragment = this.node2Fragment(this.$el)
+        this.init()
+        this.$el.appendChild(this.$fragment)
+    }
+}
+
+Compile.prototype = {
+    init: function () {
+        this.compileElement(this.$fragment)
+    },
+    node2Fragment: function (el) {
+        let fragment = document.createDocumentFragment()
+        let child
+        while (el.firstChild) {
+            child = el.firstChild
+            fragment.appendChild(child)
+        }
+        return fragment
+    },
+    compileElement: function (el) {
+        let childNodes = el.childNodes
+        let me = this
+        ;[].slice.call(childNodes).forEach(function (node) {
+            const text = node.textContent
+            const reg = /\{\{(.*)\}\}/
+            if (me.isElementNode(node)) {
+                me.compile(node)
+            } else if (me.isTextNode(node) && reg.test(text)) {
+                me.compileText(node, RegExp.$1)
+            }
+
+            if (node.childNodes && node.childNodes.length) {
+                me.compileElement(node)
+            }
+        })
+    },
+    compile: function (node) {
+        let nodeAttrs = node.attributes
+        let me = this
+        ;[].slice.call(nodeAttrs).forEach(function (attr) {
+            const attrName = attr.name
+            if (me.isDirective(attrName)) {
+                const exp = attr.value
+                const dir = attrName.substring(2)
+                if (me.isEventDirective(dir)) {
+                    compileUtil.eventHandler(node, me.$vm, exp, dir)
+                } else {
+                    compileUtil[dir] && compileUtil[dir](node, me.$vm, exp)
+                }
+
+                node.removeAttribute(attrName)
+            }
+        })
+    },
+
+    compileText: function (node, exp) {
+        compileUtil.text(node, this.$vm, exp)
+    },
+
+    isDirective: function (attr) {
+        return attr.indexOf('v-') === 0
+    },
+    isEventDirective: function (dir) {
+        return dir.indexOf('on') === 0
+    },
+    isElementNode: function (node) {
+        return node.nodeType === 1
+    },
+    isTextNode: function (node) {
+        return node.nodeType === 3
+    }
+}
+
+const compileUtil = {
+    text: function (node, vm, exp) {
+        this.bind(node, vm, exp, 'text')
+    },
+
+    html: function (node, vm, exp) {
+        this.bind(node, vm, exp, 'html')
+    },
+
+    model: function (node, vm, exp) {
+        this.bind(node, vm, exp, 'model')
+
+        let me = this
+        let val = this._getVMVal(vm, exp)
+        node.addEventListener('input', function (e) {
+            const newValue = e.target.value
+            if (val === newValue) return
+
+            me._setVMVal(vm, exp, newValue)
+            val = newValue
+        })
+    },
+
+    class: function (node, vm, exp) {
+        this.bind(node, vm, exp, 'class')
+    },
+
+    bind: function (node, vm, exp, dir) {
+        let updaterFn = updater[dir + 'Updater']
+
+        updaterFn && updaterFn(node, this._getVMVal(vm, exp))
+
+        new Watcher(vm, exp, function (value, oldValue) {
+            updaterFn && updaterFn(node, value, oldValue)
+        })
+    },
+
+    eventHandler: function (node, vm, exp, dir) {
+        let eventType = dir.split(':')[1]
+        let fn = vm.$options.methods && vm.$options.methods[exp]
+
+        if (eventType && fn) {
+            node.addEventListener(eventType, fn.bind(vm), false)
+        }
+    },
+
+    _getVMVal: function (vm, exp) {
+        let val = vm
+        exp = exp.split('.')
+        exp.forEach(function (key, index) {
+            val = val[key]
+        })
+        return val
+    },
+
+    _setVMVal: function (vm, exp, value) {
+        let val = vm
+        exp = exp.split('.')
+        exp.forEach(function (key, index) {
+            if (index < exp.length - 1) {
+                val = val[key]
+            } else {
+                val[key] = value
+            }
+        })
+    }
+}
+
+const updater = {
+    textUpdater: function (node, value) {
+        node.textContent = typeof value === 'undefined' ? '' : value
+    },
+
+    htmlUpdater: function (node, value) {
+        node.innerHTML = typeof value === 'undefined' ? '' : value
+    },
+
+    classUpdater: function (node, value, oldValue) {
+        let className = node.className
+        className = className.replace(oldValue, '').replace(/\s$/, '')
+
+        let space = className && String(value) ? ' ' : ''
+
+        node.className = className + space + value
+    },
+
+    modelUpdater: function (node, value, oldValue) {
+        node.value = typeof value === 'undefined' ? '' : value
+    }
+}
+
+
+function Watcher (vm, expOrFn, callback) {
+    this.callback = callback
+    this.vm = vm
+    this.expOrFn = expOrFn
+    this.depIds = {}
+
+    if (typeof expOrFn === 'function') {
+        this.getter = expOrFn
+    } else {
+        this.getter = this.parseGetter(expOrFn)
+    }
+
+    this.value = this.get()
+}
+
+Watcher.prototype = {
+    update: function () {
+        this.run()
+    },
+    run: function () {
+        let value = this.get()
+        let oldVal = this.value
+        if (value !== oldVal) {
+            this.value = value
+            this.callback.call(this.vm, value, oldVal)
+        }
+    },
+    get: function () {
+        Dep.target = this
+        let value = this.getter.call(this.vm, this.vm)
+        Dep.target = null
+        return value
+    },
+    addDep: function (dep) {
+        if (!this.depIds.hasOwnProperty(dep.id)) {
+            dep.addSub(this)
+            this.depIds[dep.id] = dep
+        }
+    },
+    parseGetter: function (exp) {
+        if (/[^\w.$]/.test(exp)) return
+
+        let exps = exp.split('.')
+
+        return function (obj) {
+            if (!obj) return
+            for (let i = 0, l = exps.length; i < l; i ++) {
+                obj = obj[exps[i]]
+            }
+            return obj
+        }
+    }
+}
+
+function MVVM (options) {
+    this.$options = options || {}
+    var data  = this.$options.data
+    let me = this
+
+    Object.keys(data).forEach(function (key) {
+        me._proxyData(key)
+    })
+
+    this._initComputed()
+
+    this._data = observe(data, this)
+
+    this.$compile = new Compile(options.el || document.body, this)
+}
+
+MVVM.prototype = {
+    $watch: function (key, callback, options) {
+        new Watcher(this, key, callback)
+    },
+
+    _proxyData: function (key, setter, getter) {
+        let me = this
+        setter = setter ||
+        Object.defineProperty(me, key, {
+            configurable: false,
+            enumerable: true,
+            get: function proxyGetter () {
+                return me._data[key]
+            },
+            set: function proxySetter (newVal) {
+                me._data[key] = newVal
+            }
+        })
+    },
+
+
+    _initComputed: function () {
+        let me = this
+        let computed = this.$options.computed
+        if (typeof computed === 'object') {
+            Object.keys(computed).forEach(function (key) {
+                Object.defineProperty(me, key, {
+                    get: typeof computed[key] === 'function'
+                            ? computed[key]
+                            : computed[key].get,
+                    set: function () {}
+                })
+            })
+        }
+    }
+}
+
+var vm = new MVVM({
+    data: {
+        name: 'haha'
+    }
+})
+
+
+</script>
+</body>
+
+</html>
